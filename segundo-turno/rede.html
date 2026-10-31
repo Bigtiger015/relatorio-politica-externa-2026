@@ -75,6 +75,8 @@ main{max-width:1500px;margin:0 auto;padding-top:18px}
 #net{display:block;width:100%;height:auto;aspect-ratio:1000/860;cursor:grab;touch-action:pan-y}
 #net:active{cursor:grabbing}
 .zoom{position:absolute;right:8px;top:8px;display:flex;flex-direction:column;gap:4px}
+.vazio-net{position:absolute;left:8%;right:12%;top:14%;padding:14px 18px;border:2px dashed var(--line);background:var(--panel);color:var(--fg);font-size:14px;line-height:1.55;pointer-events:none}
+.vazio-net b{color:var(--yellow)}
 .zoom button{width:32px;height:32px;border:2px solid var(--fg);background:var(--bg);font-weight:700;cursor:pointer;line-height:1;padding:0}
 .zoom button:hover{background:var(--yellow);color:#1c1714}
 .tip{position:absolute;z-index:5;pointer-events:none;background:var(--fg);color:var(--bg);padding:5px 8px;font-size:12.5px;line-height:1.3;max-width:270px}
@@ -207,6 +209,7 @@ footer .m{margin-top:16px}
       <div class="netwrap">
         <svg id="net" viewBox="0 0 1000 860" role="group" aria-label="Rede de co-ocorrência de temas. Use Tab para percorrer os nós e Enter para selecionar."></svg>
         <div class="zoom"><button type="button" id="zin" aria-label="Ampliar">+</button><button type="button" id="zout" aria-label="Reduzir">−</button><button type="button" id="zreset" aria-label="Recentrar" title="Recentrar">○</button></div>
+        <div class="vazio-net" id="vazioNet" role="status" hidden></div>
         <div class="tip" id="tip" hidden></div>
       </div>
       <div class="legend" id="legend" aria-label="Legenda das comunidades"></div>
@@ -285,7 +288,8 @@ var COLORS=8, VH=860, RMIN=5, RMAX=28, LABMAX=22;
 var cache={};
 function variantData(v){return (D.variantes||{})[v]||{};}
 function buildModel(variant,layer){
-  var key=variant+'|'+layer; if(cache[key])return cache[key];
+  // o layout depende do que está à vista: com o esqueleto vazio (2º turno), "todas as significativas" precisa de outro arranjo
+  var key=variant+'|'+layer+'|'+(st.all?1:0)+'|'+(st.ns?1:0); if(cache[key])return cache[key];
   var src, N;
   if(layer==='C'){src=D.pago||{nodes:[],edges:[]};N=META.N_pago;}
   else{src=((variantData(variant).camadas||{})[layer])||{nodes:[],edges:[]};}
@@ -328,7 +332,8 @@ function buildModel(variant,layer){
 function labW(n){return Math.min(150,Math.min(n.name.length,LABMAX)*7.6+4);}
 function layout(M){
   var W=1000, H=VH, PAD=48, lr=mulberry32(11);
-  var vis=M.edges.filter(function(e){return e.esq&&e.c>=2;});
+  var skel=M.layer==='B'&&!st.all;
+  var vis=M.edges.filter(function(e){if(e.c<2)return false;if(!e.sig)return st.ns;return skel?e.esq:true;});
   var conn={}; vis.forEach(function(e){conn[e.s.id]=1;conn[e.t.id]=1;});
   var core=M.nodes.filter(function(n){return conn[n.id];}), iso=M.nodes.filter(function(n){return !conn[n.id];});
   iso.sort(function(a,b){return b.n-a.n;});
@@ -502,11 +507,29 @@ function drawStrip(M){
   en.append('line'); en.append('text').attr('class','striptxt');
   g=en.merge(g);
   g.select('line').attr('x1',20).attr('x2',980).attr('y1',function(d){return d.y;}).attr('y2',function(d){return d.y;}).attr('stroke','var(--line)').attr('stroke-width',2).attr('stroke-dasharray','6 5');
-  g.select('text').attr('x',22).attr('y',function(d){return d.y+16;}).attr('font-size',12).attr('fill','var(--muted)').text('sem ligação no esqueleto (passe o mouse para ver o nome)');
+  g.select('text').attr('x',22).attr('y',function(d){return d.y+16;}).attr('font-size',12).attr('fill','var(--muted)').text((st.layer==='B'&&!st.all?'sem ligação no esqueleto':'sem ligação à vista com estes filtros')+' (passe o mouse para ver o nome)');
+}
+function msgVazio(M){
+  var cand=M.edges.filter(function(e){return e.c>=st.cut;});
+  var ext=cand.filter(function(e){return (e.tp||'').indexOf('ext')===0;}), extSig=ext.filter(function(e){return e.sig;});
+  var sig=cand.filter(function(e){return e.sig;});
+  var h='<b>Nenhuma ligação para desenhar com estes filtros.</b><br>';
+  if(st.layer==='B'&&!st.all){
+    h+='Nenhum tema externo tem ligação significativa (q &lt; 0,05) com tema doméstico ou ator citado neste turno: '+
+      (ext.length?(ext.length===1?'1 par com tema externo aparece':ext.length+' pares com tema externo aparecem')+' junto em pelo menos '+st.cut+' peças, e '+
+        (extSig.length?extSig.length+(extSig.length===1?' passa':' passam')+' no teste':'nenhum passa no teste'):
+        'nenhum par com tema externo aparece junto em pelo menos '+st.cut+' peças')+
+      '. É o resultado, não falha da página.';
+    if(sig.length)h+=' As '+sig.length+' ligações significativas desta camada são entre temas domésticos e atores; para vê-las, marque “mostrar todas as ligações significativas”.';
+  }else{
+    h+='Nenhum par aparece junto em pelo menos '+st.cut+' peças'+(st.ns?'':' com associação significativa')+'. Reduza a co-ocorrência mínima'+(st.ns?'':' ou mostre as não significativas')+'.';
+  }
+  return h+' Os nós estão na faixa de baixo; passe o mouse para ver o nome.';
 }
 function drawNet(M){
   curM=M; drawStrip(M);
   var ve=visEdges(M), deg=degMap(M), nb=st.sel!=null?neighborsOf(M,st.sel):null;
+  var vz=$('vazioNet'); vz.hidden=!!ve.length||M.layer==='C'||!M.nodes.length; if(!vz.hidden)vz.innerHTML=msgVazio(M);
   var ek=function(e){return e.s.id+'|'+e.t.id;};
   var isSelE=function(e){return st.sel!=null&&(e.s.id===st.sel||e.t.id===st.sel);};
   edgeSel=gE.selectAll('line').data(ve,ek);
